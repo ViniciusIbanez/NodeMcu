@@ -1,0 +1,149 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <ArduinoJson.h>
+#include <LiquidCrystal_I2C.h>
+
+#define  SS_PIN D4
+#define RST_PIN D3
+
+const char* ssid = "VINICIUS";
+const char* password = "WPA1123WPA";
+String last_card = "";
+String header;
+int count = 0;
+
+
+
+
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+WiFiClient wifiClient;
+WiFiServer server(80);
+HTTPClient http;
+
+void setup() {
+
+  Serial.begin(9600);
+  SPI.begin();
+  lcd.begin(16,2);
+  lcd.init();
+  lcd.backlight();
+  mfrc522.PCD_Init();
+
+  setupWifi();
+
+
+
+}
+
+void loop() {
+
+  if(count == 0){
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Aguardando...");
+    count+=1;
+  }
+
+
+  WiFiClient client = server.available();
+  if(client){
+    Serial.println("CLIENT");
+    if(client.available()){
+      Serial.println("CLIENT AVAILABLE");
+
+      Serial.println(client.read());                    // print it out the serial monitor
+      //header += c;
+
+      if (header.indexOf("GET /rfid/red") >= 0) {
+              readRfid();
+            }
+    }
+  }
+
+
+
+}
+
+//void readStatus(){
+
+void setupWifi(){
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(2000);
+    Serial.println("Connecting..");
+    lcd.setCursor(0, 0);
+    lcd.print("Conectando...");
+
+  }
+  Serial.println("Wifi Connected");
+  Serial.println(WiFi.localIP());
+  server.begin();
+}
+
+void readRfid(){
+  Serial.println("Reading RFID");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Aproxime ");
+  lcd.setCursor(0, 1);
+  lcd.print("o cartao");
+  if(mfrc522.PICC_IsNewCardPresent()){
+
+    if(mfrc522.PICC_ReadCardSerial()){
+
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("Tag UID: ");
+        String uid = "";
+          for(byte i=0; i< mfrc522.uid.size; i++){
+            Serial.print(mfrc522.uid.uidByte[i]< 0x10 ? " 0": " ");
+            Serial.print(mfrc522.uid.uidByte[i], HEX);
+            uid = uid+mfrc522.uid.uidByte[i];
+          }
+          Serial.println();
+          mfrc522.PICC_HaltA();
+
+          registerFrequency(uid);
+
+            }
+
+            }
+
+    }
+}
+
+void registerFrequency(String uid){
+
+
+  if(uid != last_card){
+
+    String postData = "{\"user\":\""+ uid +"\"}";
+
+  http.begin(wifiClient,"http://my-binder-api-staging.herokuapp.com/demonstration");  //Specify request destination
+  http.addHeader("Content-Type", "application/json");
+  int httpCode = http.POST(postData);                                  //Send the request
+
+  if (httpCode > 0) { //Check the returning code
+
+    String payload = http.getString();   //Get the request response payload
+    Serial.println(payload);             //Print the response payload
+
+  }
+
+  last_card = uid;
+  http.end();
+  }else {
+    Serial.println("Repetição de cartão");
+  }
+
+}
+
+
+
+ 
