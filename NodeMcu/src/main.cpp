@@ -21,12 +21,55 @@ const char* webserver_url  = SECRET_WEBSERVER_URL;
 String auth;
 String classroom;
 
+
 bool is_attendance_open = false;
 
 ESP8266WebServer http_rest_server(HTTP_REST_PORT);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 HTTPClient http;
+
+typedef struct node {
+    String uid;
+    struct node * next;
+} node_t;
+
+node_t * head = NULL;
+
+void init_already_read_cards(){
+
+  head = (node_t *) malloc(sizeof(node_t));
+  if (head == NULL) {
+
+  }
+
+  head->uid = 1;
+  head->next = NULL;
+}
+
+void push(node_t * head, String val) {
+    node_t * current = head;
+    while (current->next != NULL) {
+        current = current->next;
+    }
+
+    /* now we can add a new variable */
+    current->next = (node_t *) malloc(sizeof(node_t));
+    current->next->uid = val;
+    current->next->next = NULL;
+}
+
+bool shouldMarkAttendance(String uid, node_t * head){
+  node_t * current = head;
+
+    while (current != NULL) {
+        if(current->uid ==  uid){
+          return false;
+        }
+        current = current->next;
+    }
+    return true;
+}
 
 // LCD
 void init_lcd(){
@@ -70,53 +113,82 @@ int init_wifi() {
 
 //Login
 
-String login(){
+void rest_state(){
   //Serial.println(String("id: ")+webserver_url+String("\nsenha: ")+ ESP.getChipId());
+  write_lcd("Aguardando", true, 0);
+  write_lcd("Chamada", false, 1);
 
-  return "";
 }
 
 //Login
 
 // Mark attendance
 
+
 String mark_attendance(String uid) {
+
+    write_lcd("Realizando", true, 0);
+    write_lcd("leitura", false, 1);
 
     WiFiClient wifiClient;
 
-    const size_t CAPACITY = JSON_OBJECT_SIZE(8);
+    const size_t CAPACITY = JSON_OBJECT_SIZE(20);
     StaticJsonDocument<CAPACITY> doc;
     JsonObject object = doc.to<JsonObject>();
 
     object["classroom"] = classroom;
     object["rfid"] = uid;
 
-    String body;
-    serializeJson(doc, Serial);
-    serializeJson(doc, body);
+    if(!shouldMarkAttendance(uid, head)){
+      Serial.println("Repetição de RA");
+      write_lcd("Chamada ja", true, 0);
+      write_lcd("Registrada ", false, 1);
+      delay(1000);
+      lcd.clear();
 
+    }else{
 
-    http.begin(wifiClient, api_url+ String("/frequency"));
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", auth);
-    int httpCode = http.POST(body);
+      String body;
+      serializeJson(doc, Serial);
+      serializeJson(doc, body);
+      http.begin(wifiClient, api_url+ String("/frequency"));
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("Authorization", auth);
+      int httpCode = http.POST(body);
 
-    // RESPONSE
-    String payload = "";
-    Serial.println("HTTP REQUEST");
-    if (httpCode > 0) { //Check the returning code
+      // RESPONSE
+      String payload = "";
+      Serial.println("HTTP REQUEST");
+      if (httpCode > 0) { //Check the returning code
 
-      payload = http.getString();   //Get the request response payload
-      Serial.println(payload);             //Print the response payload
+        payload = http.getString();   //Get the request response payload
+        //Serial.println(payload);
+        StaticJsonDocument<1000> doc;
+        deserializeJson(doc, payload);
+        String ra = doc["ra"];
+        Serial.println(ra);
+        if(ra != "null"){
+          push(head, uid);
+          write_lcd("Sucesso", true, 0);
+          write_lcd(ra, false, 1);
+        }else{
+          write_lcd("RA invalido", true, 0);
+        }
+        delay(1000);
+        //Print the response payload
 
-    http.end();
-
+      http.end();
+      return payload;
+      }
     }
 
-    lcd.clear();
 
-    return payload;
+    //lcd.clear();
+    return "";
+
 }
+
+
 
 // Mark attendance
 
@@ -136,7 +208,7 @@ void readRfid(){
             Serial.print(mfrc522.uid.uidByte[i], HEX);
             uid = uid+mfrc522.uid.uidByte[i];
           }
-          write_lcd(uid, true, 0);
+          //write_lcd(uid, true, 0);
           Serial.println(uid);
           mark_attendance(uid);
           mfrc522.PICC_HaltA();
@@ -153,12 +225,13 @@ void readRfid(){
 // INIT ATTENDANCE
 
 void init_attendance() {
+  init_already_read_cards();
   DynamicJsonDocument doc(2048);
   deserializeJson(doc, http_rest_server.arg("plain"));
 
   auth = String(doc["token"]);
   classroom = String(doc["classroom"]);
-  Serial.println(auth + "\n" + classroom);
+  //Serial.println(auth + "\n" + classroom);
 
   http_rest_server.send(200, "application/json", "Chamada Iniciada");
   write_lcd("Iniciando", true, 0);
@@ -166,10 +239,11 @@ void init_attendance() {
   delay(4);
   Serial.println("INICIANDO CHAMADA");
   is_attendance_open= true;
-  login();
+  write_lcd("", true, 0);
+  write_lcd("", true, 1);
   while(is_attendance_open){
-    http_rest_server.handleClient();
     readRfid();
+    http_rest_server.handleClient();
   }
 
 }
@@ -187,7 +261,10 @@ void close_attendance() {
   Serial.println("Finalizando chamada");
   write_lcd("Finalizando", true, 0);
   write_lcd("Chamada", false, 1);
+  delay(1000);
   is_attendance_open = false;
+  memset(head, 0, sizeof(head));
+  rest_state();
 }
 
 
@@ -229,8 +306,7 @@ void setup(void) {
 
     http_rest_server.begin();
     Serial.println("HTTP REST Server Started");
-    write_lcd("Aguardando", true, 0);
-    write_lcd("Chamada", false, 1);
+    rest_state();
 }
 
 void loop(void) {
